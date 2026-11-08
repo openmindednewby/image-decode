@@ -1,6 +1,6 @@
 import { ImageFormat } from './ImageFormat';
 import { probeImage } from './probeImage';
-import { brandedHeader, jpegHeader, pngHeader } from './testImages';
+import { brandedHeader, heifHeader, jpegHeader, pngHeader } from './testImages';
 
 const GIF = new Uint8Array([0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x10, 0, 0x20, 0]);
 const VP8L = new Uint8Array([0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50, 0x56, 0x50, 0x38, 0x4c, 0, 0, 0, 0, 0x2f, 0xaf, 0xcf, 0x1f, 0x03]);
@@ -24,6 +24,38 @@ describe('probeImage', () => {
     const probe = probeImage(new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x7f, 0xff]));
 
     expect(probe).toEqual({ format: ImageFormat.Jpeg });
+  });
+
+  it.each([
+    ['HEIC', 'heic', ImageFormat.Heic],
+    ['AVIF', 'avif', ImageFormat.Avif],
+  ])('with an %s holding a thumbnail and the main image, reads the larger size', (_label, brand, format) => {
+    const probe = probeImage(heifHeader(brand, [[320, 240], [4032, 3024]]));
+
+    expect(probe).toEqual({ format, width: 4032, height: 3024 });
+  });
+
+  it.each([
+    ['a quarter turn', 1],
+    ['three quarter turns', 3],
+  ])('with an HEIC stored with %s, swaps width and height', (_label, quarterTurns) => {
+    const probe = probeImage(heifHeader('heic', [[4032, 3024]], quarterTurns));
+
+    expect(probe).toEqual({ format: ImageFormat.Heic, width: 3024, height: 4032 });
+  });
+
+  it('with an HEIC stored upside down, keeps width and height', () => {
+    const probe = probeImage(heifHeader('heic', [[4032, 3024]], 2));
+
+    expect(probe).toEqual({ format: ImageFormat.Heic, width: 4032, height: 3024 });
+  });
+
+  it('with an HEIC cut off inside its properties, keeps the format and no size', () => {
+    const whole = heifHeader('heic', [[4032, 3024]]);
+
+    const probe = probeImage(whole.subarray(0, whole.length - 6));
+
+    expect(probe).toEqual({ format: ImageFormat.Heic });
   });
 
   it('with a PNG, reads the size', () => {

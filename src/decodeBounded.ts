@@ -9,6 +9,9 @@ export const DEFAULT_MAX_SOURCE_PIXELS = 220_000_000;
 export const DEFAULT_MAX_FILE_BYTES = 128 * 1024 * 1024;
 
 const HEAD_BYTES = 1024 * 1024;
+const MOST_HEAD_BYTES = 16 * HEAD_BYTES;
+const DECODE_STYLE: ImageBitmapOptions = { imageOrientation: 'from-image', resizeQuality: 'medium' };
+const HEADER_CAN_SIT_DEEP: ReadonlySet<ImageFormat> = new Set([ImageFormat.Jpeg, ImageFormat.Heic, ImageFormat.Avif]);
 const MEMORY_MESSAGE = /memory|allocat/i;
 const UNKNOWN_IMAGE: ImageProbe = { format: ImageFormat.Unknown };
 
@@ -40,7 +43,7 @@ function fitWithin(size: Size, maxSide: number): Size {
 }
 
 function resized(source: ImageBitmapSource, size: Size): Promise<ImageBitmap> {
-  return createImageBitmap(source, { resizeWidth: size.width, resizeHeight: size.height, resizeQuality: 'medium' });
+  return createImageBitmap(source, { ...DECODE_STYLE, resizeWidth: size.width, resizeHeight: size.height });
 }
 
 async function decodeKnownSize(file: Blob, format: ImageFormat, size: Size, maxSide: number): Promise<BoundedDecodeResult> {
@@ -54,16 +57,16 @@ async function decodeKnownSize(file: Blob, format: ImageFormat, size: Size, maxS
   return decoded(await resized(file, { width: target.height, height: target.width }), format, size);
 }
 
-async function decodeUnknownSize(file: Blob, format: ImageFormat, limits: Limits): Promise<BoundedDecodeResult> {
-  const full = await createImageBitmap(file);
-  const size = { width: full.width, height: full.height };
+async function decodeUnknownSize(file: Blob, format: ImageFormat, maxSide: number): Promise<BoundedDecodeResult> {
+  const first = await createImageBitmap(file, { ...DECODE_STYLE, resizeWidth: maxSide });
+  const size = { width: first.width, height: first.height };
+  if (Math.max(size.width, size.height) <= maxSide) {
+    return decoded(first, format, size);
+  }
   try {
-    if (size.width * size.height > limits.maxSourcePixels) {
-      return failed(ImageDecodeFailure.TooLarge, { format, ...size });
-    }
-    return decoded(await resized(full, fitWithin(size, limits.maxSide)), format, size);
+    return decoded(await resized(first, fitWithin(size, maxSide)), format, size);
   } finally {
-    full.close();
+    first.close();
   }
 }
 
@@ -79,12 +82,22 @@ function failureOfDecode(error: unknown, format: ImageFormat): ImageDecodeFailur
 async function decodeProbed(file: Blob, probe: ImageProbe, limits: Limits): Promise<BoundedDecodeResult> {
   const { width, height, format } = probe;
   if (width === undefined || height === undefined) {
-    return decodeUnknownSize(file, format, limits);
+    return decodeUnknownSize(file, format, limits.maxSide);
   }
   if (width * height > limits.maxSourcePixels) {
     return failed(ImageDecodeFailure.TooLarge, probe);
   }
   return decodeKnownSize(file, format, { width, height }, limits.maxSide);
+}
+
+async function probeHead(file: Blob, bytes: number): Promise<ImageProbe> {
+  return probeImage(new Uint8Array(await file.slice(0, bytes).arrayBuffer()));
+}
+
+async function probeFile(file: Blob): Promise<ImageProbe> {
+  const probe = await probeHead(file, HEAD_BYTES);
+  const isWorthReadingMore = probe.width === undefined && HEADER_CAN_SIT_DEEP.has(probe.format) && file.size > HEAD_BYTES;
+  return isWorthReadingMore ? probeHead(file, MOST_HEAD_BYTES) : probe;
 }
 
 /** Decodes a photo no larger than `maxSide`; never throws, a failure names its reason and carries no image data. */
@@ -97,7 +110,7 @@ export async function decodeBounded(file: Blob, options: BoundedDecodeOptions = 
   }
   let probe: ImageProbe;
   try {
-    probe = probeImage(new Uint8Array(await file.slice(0, HEAD_BYTES).arrayBuffer()));
+    probe = await probeFile(file);
   } catch (error) {
     return failed(ImageDecodeFailure.ReadFailed, UNKNOWN_IMAGE, errorNameOf(error));
   }

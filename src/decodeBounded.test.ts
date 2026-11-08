@@ -1,9 +1,10 @@
 import { decodeBounded, DEFAULT_MAX_FILE_BYTES, DEFAULT_MAX_SIDE } from './decodeBounded';
 import { ImageDecodeFailure } from './ImageDecodeFailure';
 import { ImageFormat } from './ImageFormat';
-import { brandedHeader, jpegHeader } from './testImages';
+import { brandedHeader, heifHeader, jpegHeader, jpegHeaderAfterSegments } from './testImages';
 
 const CHANNELS = 4;
+const SEGMENTS_PAST_ONE_MEGABYTE = 20;
 const createBitmap = jest.fn();
 
 function bitmap(width: number, height: number): ImageBitmap {
@@ -114,8 +115,12 @@ describe('decodeBounded', () => {
     expect(result).toEqual({ ok: false, failure: ImageDecodeFailure.DecodeFailed, format: ImageFormat.Jpeg, sourceWidth: 12000, sourceHeight: 9000, errorName: 'InvalidStateError' });
   });
 
-  it('with an out of memory error, fails memory', async () => {
-    createBitmap.mockRejectedValue(decodeError('RangeError', 'Array buffer allocation failed'));
+  it.each([
+    ['a RangeError', 'RangeError', 'Array buffer allocation failed'],
+    ['the browser refusing to allocate the bitmap', 'InvalidStateError', 'The ImageBitmap could not be allocated.'],
+    ['an error naming memory', 'Error', 'Out of memory'],
+  ])('with %s, fails memory', async (_label, name, message) => {
+    createBitmap.mockRejectedValue(decodeError(name, message));
 
     const result = await decodeBounded(blobOf(jpegHeader(12000, 9000)));
 
@@ -130,24 +135,58 @@ describe('decodeBounded', () => {
     expect(result).toMatchObject({ ok: false, failure: ImageDecodeFailure.UnsupportedFormat, format: ImageFormat.Heic });
   });
 
-  it('with an HEIC the browser can decode, downscales the decoded bitmap', async () => {
-    const full = bitmap(4000, 3000);
-    createBitmap.mockResolvedValueOnce(full).mockResolvedValueOnce(bitmap(1600, 1200));
+  it('with an HEIC whose header gives no size, bounds the first decode by width', async () => {
+    createBitmap.mockResolvedValueOnce(bitmap(1600, 1200));
 
     const result = await decodeBounded(blobOf(brandedHeader('heic')));
 
-    expect(result).toMatchObject({ ok: true, format: ImageFormat.Heic, sourceWidth: 4000, sourceHeight: 3000 });
-    expect(createBitmap.mock.calls[1][0]).toBe(full);
-    expect(full.close).toHaveBeenCalledTimes(1);
+    expect(createBitmap).toHaveBeenCalledTimes(1);
+    expect(createBitmap.mock.calls[0][1]).toMatchObject({ resizeWidth: DEFAULT_MAX_SIDE, imageOrientation: 'from-image' });
+    expect(result).toMatchObject({ ok: true, format: ImageFormat.Heic, sourceWidth: 1600, sourceHeight: 1200 });
   });
 
-  it('with an unknown-size image over the pixel cap, closes it and fails too-large', async () => {
-    const full = bitmap(4000, 3000);
-    createBitmap.mockResolvedValueOnce(full);
+  it('with a tall image of unknown size, shrinks the width-bounded bitmap to the limit and closes it', async () => {
+    const tall = bitmap(1600, 3200);
+    createBitmap.mockResolvedValueOnce(tall).mockResolvedValueOnce(bitmap(800, 1600));
 
-    const result = await decodeBounded(blobOf(brandedHeader('avif')), { maxSourcePixels: 1000 });
+    await decodeBounded(blobOf(brandedHeader('heic')));
+
+    expect(createBitmap.mock.calls[1][0]).toBe(tall);
+    expect(createBitmap.mock.calls[1][1]).toMatchObject({ resizeWidth: 800, resizeHeight: 1600 });
+    expect(tall.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('with an HEIC whose header gives its size, decodes once at the bounded size', async () => {
+    echoRequestedSize();
+
+    const result = await decodeBounded(blobOf(heifHeader('heic', [[8000, 6000]])));
+
+    expect(createBitmap).toHaveBeenCalledTimes(1);
+    expect(createBitmap.mock.calls[0][1]).toMatchObject({ resizeWidth: 1600, resizeHeight: 1200 });
+    expect(result).toMatchObject({ ok: true, format: ImageFormat.Heic, sourceWidth: 8000, sourceHeight: 6000 });
+  });
+
+  it('with an AVIF over the pixel cap, fails too-large without decoding', async () => {
+    const result = await decodeBounded(blobOf(heifHeader('avif', [[4000, 3000]])), { maxSourcePixels: 1000 });
 
     expect(result).toMatchObject({ ok: false, failure: ImageDecodeFailure.TooLarge, sourceWidth: 4000, sourceHeight: 3000 });
-    expect(full.close).toHaveBeenCalledTimes(1);
+    expect(createBitmap).not.toHaveBeenCalled();
+  });
+
+  it('with a JPEG frame header past the first megabyte, still reads the size', async () => {
+    echoRequestedSize();
+
+    const result = await decodeBounded(blobOf(jpegHeaderAfterSegments(SEGMENTS_PAST_ONE_MEGABYTE, 12000, 9000)));
+
+    expect(createBitmap.mock.calls[0][1]).toMatchObject({ resizeWidth: 1600, resizeHeight: 1200 });
+    expect(result).toMatchObject({ ok: true, format: ImageFormat.Jpeg, sourceWidth: 12000, sourceHeight: 9000 });
+  });
+
+  it('with a bounded decode, keeps the image upright by its own orientation', async () => {
+    echoRequestedSize();
+
+    await decodeBounded(blobOf(jpegHeader(4000, 3000)));
+
+    expect(createBitmap.mock.calls[0][1]).toMatchObject({ imageOrientation: 'from-image' });
   });
 });

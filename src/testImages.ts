@@ -24,6 +24,41 @@ export function pngHeader(width: number, height: number): Uint8Array {
   return out;
 }
 
+function u32(value: number): number[] {
+  return [(value >>> 24) & 0xff, (value >>> 16) & 0xff, (value >>> 8) & 0xff, value & 0xff];
+}
+
+function chars(text: string): number[] {
+  return Array.from(text, (char) => char.charCodeAt(0));
+}
+
+function box(type: string, body: readonly number[]): number[] {
+  return [...u32(body.length + 8), ...chars(type), ...body];
+}
+
+const NO_FULL_BOX_FIELDS = [0, 0, 0, 0];
+
+export function heifHeader(brand: string, sizes: ReadonlyArray<readonly [number, number]>, quarterTurns = 0): Uint8Array {
+  const ispe = sizes.flatMap(([width, height]) => box('ispe', [...NO_FULL_BOX_FIELDS, ...u32(width), ...u32(height)]));
+  const irot = quarterTurns === 0 ? [] : box('irot', [quarterTurns]);
+  const properties = box('iprp', box('ipco', [...ispe, ...irot]));
+  const meta = box('meta', [...NO_FULL_BOX_FIELDS, ...box('hdlr', NO_FULL_BOX_FIELDS), ...properties]);
+  return new Uint8Array([...box('ftyp', [...chars(brand), ...NO_FULL_BOX_FIELDS]), ...meta]);
+}
+
+const LONGEST_SEGMENT_BYTES = 65537;
+
+export function jpegHeaderAfterSegments(segments: number, width: number, height: number): Uint8Array {
+  const frame = jpegHeader(width, height);
+  const out = new Uint8Array(frame.length + segments * LONGEST_SEGMENT_BYTES);
+  out.set(JPEG_START);
+  for (let index = 0; index < segments; index += 1) {
+    out.set([0xff, 0xe2, 0xff, 0xff], JPEG_START.length + index * LONGEST_SEGMENT_BYTES);
+  }
+  out.set(frame.subarray(JPEG_START.length), JPEG_START.length + segments * LONGEST_SEGMENT_BYTES);
+  return out;
+}
+
 export function brandedHeader(brand: string): Uint8Array {
   const text = `ftyp${brand}`;
   return new Uint8Array([0, 0, 0, 24, ...Array.from(text, (char) => char.charCodeAt(0)), 0, 0, 0, 0]);
