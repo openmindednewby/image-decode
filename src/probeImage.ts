@@ -49,6 +49,15 @@ const VP8L_HEIGHT_SHIFT = 14;
 const VP8_WIDTH_AT = 26;
 const VP8_HEIGHT_AT = 28;
 const WEBP_SIZE_MASK = 0x3fff;
+const MAGIC_AT = 0;
+const BMFF_BOX_TYPE_AT = 4;
+const BMFF_MAJOR_BRAND_AT = 8;
+const BMFF_COMPATIBLE_BRANDS_AT = 16;
+const WEBP_FORM_TYPE_AT = 8;
+const PNG_WIDTH_AT = 16;
+const PNG_HEIGHT_AT = 20;
+const GIF_WIDTH_AT = 6;
+const GIF_HEIGHT_AT = 8;
 const HEIC_BRANDS = ['heic', 'heix', 'hevc', 'hevx', 'heim', 'heis', 'hevm', 'hevs', 'mif1', 'msf1'];
 const AVIF_BRANDS = ['avif', 'avis'];
 
@@ -62,9 +71,9 @@ function ascii(head: Uint8Array, at: number, length: number): string {
 
 function bmffBrands(head: Uint8Array, view: DataView): string[] {
   const end = Math.min(view.getUint32(0), head.length);
-  const brands = [ascii(head, 8, 4)];
-  for (let at = 16; at + 4 <= end; at += 4) {
-    brands.push(ascii(head, at, 4));
+  const brands = [ascii(head, BMFF_MAJOR_BRAND_AT, FOURCC_BYTES)];
+  for (let at = BMFF_COMPATIBLE_BRANDS_AT; at + FOURCC_BYTES <= end; at += FOURCC_BYTES) {
+    brands.push(ascii(head, at, FOURCC_BYTES));
   }
   return brands;
 }
@@ -84,13 +93,13 @@ function formatOf(head: Uint8Array, view: DataView): ImageFormat {
   if (hasSignature(head, PNG_SIGNATURE)) {
     return ImageFormat.Png;
   }
-  if (ascii(head, 0, 4) === 'GIF8') {
+  if (ascii(head, MAGIC_AT, FOURCC_BYTES) === 'GIF8') {
     return ImageFormat.Gif;
   }
-  if (ascii(head, 0, 4) === 'RIFF' && ascii(head, 8, 4) === 'WEBP') {
+  if (ascii(head, MAGIC_AT, FOURCC_BYTES) === 'RIFF' && ascii(head, WEBP_FORM_TYPE_AT, FOURCC_BYTES) === 'WEBP') {
     return ImageFormat.Webp;
   }
-  return ascii(head, 4, 4) === 'ftyp' ? bmffFormat(head, view) : ImageFormat.Unknown;
+  return ascii(head, BMFF_BOX_TYPE_AT, FOURCC_BYTES) === 'ftyp' ? bmffFormat(head, view) : ImageFormat.Unknown;
 }
 
 function exifOrientation(view: DataView, start: number): number | undefined {
@@ -161,10 +170,10 @@ function sizeOf(format: ImageFormat, head: Uint8Array, view: DataView): Size | u
     return jpegSize(view);
   }
   if (format === ImageFormat.Png) {
-    return { width: view.getUint32(16), height: view.getUint32(20) };
+    return { width: view.getUint32(PNG_WIDTH_AT), height: view.getUint32(PNG_HEIGHT_AT) };
   }
   if (format === ImageFormat.Gif) {
-    return { width: view.getUint16(6, true), height: view.getUint16(8, true) };
+    return { width: view.getUint16(GIF_WIDTH_AT, true), height: view.getUint16(GIF_HEIGHT_AT, true) };
   }
   if (format === ImageFormat.Webp) {
     return webpSize(head, view);

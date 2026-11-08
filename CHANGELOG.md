@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.2
+
+- `probeImage` header offsets are named constants. No behaviour change.
+
 ## 0.1.1
 
 - The first decode of an image with no readable size is bounded by `resizeWidth`; `sourceWidth` and `sourceHeight` then report the decoded size.
