@@ -1,6 +1,6 @@
 {
   "name": "@dloizides/image-decode",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Bounded image decode for browsers and workers: reads a photo header, downscales while decoding and returns a named failure reason instead of throwing.",
   "keywords": [
     "image",
